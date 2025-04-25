@@ -1,0 +1,7 @@
+gymnasium==0.29.1
+stable-baselines3==2.2.1
+numpy>=2.2.5
+torch>=2.2.0
+python-dotenv==1.0.0
+pyautogui==0.9.54
+minecraft-python-api==0.1.0 
