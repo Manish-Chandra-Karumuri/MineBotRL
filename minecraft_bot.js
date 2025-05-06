@@ -1,457 +1,267 @@
+// minecraft_bot.js
 const mineflayer = require('mineflayer');
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+const { GoalNear } = goals;
+const { Vec3 } = require('vec3');
+const collectBlock = require('mineflayer-collectblock').plugin;
+const mcDataLoader = require('minecraft-data');
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
-const bodyParser = require('body-parser');
+const { parseShapedRecipe, parseShapelessRecipe } = require('./recipeParser');
 
-// Create an Express server to communicate with Python
 const app = express();
-app.use(bodyParser.json());
-const PORT = 3000;
+const port = 3000;
 
-// Bot configuration
-let botConfig = {
-    host: 'localhost',       // Default Minecraft server host
-    port: 25565,             // Default Minecraft server port
-    username: 'RLBot',       // Bot username
-    version: '1.21.1'        // Minecraft version
-};
+let bot, mcData;
+let craftingInProgress = false;
+let lastLogCollection = 0;
 
-// Initialize the bot
-let bot = null;
-let botConnected = false;
-let botPosition = { x: 0, y: 0, z: 0 };
-let botHealth = 20;
-let botHunger = 20;
-let botInventory = {};
+function createBot() {
+  bot = mineflayer.createBot({
+    host: 'localhost',
+    port: 25565,
+    username: 'RLBot'
+  });
 
-// Function to connect the bot to the Minecraft server
-function connectBot(config) {
-    // Create a new bot instance
-    bot = mineflayer.createBot(config);
-    
-    // Event handlers
-    bot.on('spawn', () => {
-        console.log('Bot spawned in the world');
-        botConnected = true;
-        updateBotState();
-        
-        // Send a chat message to indicate the bot is active
-        bot.chat("Hello! I am an RL bot learning to play Minecraft!");
-        
-        // Activate auto-reconnect for better stability
-        if (bot.autoReconnect) {
-            bot.autoReconnect.enabled = true;
-        }
-    });
-    
-    bot.on('error', (err) => {
-        console.error('Bot error:', err);
-        botConnected = false;
-        
-        // Try to reconnect after an error
-        console.log('Attempting to reconnect in 5 seconds...');
-        setTimeout(() => {
-            if (!botConnected) {
-                connectBot(botConfig);
-            }
-        }, 5000);
-    });
-    
-    bot.on('end', () => {
-        console.log('Bot disconnected');
-        botConnected = false;
-        
-        // Try to reconnect after disconnection
-        console.log('Attempting to reconnect in 5 seconds...');
-        setTimeout(() => {
-            if (!botConnected) {
-                connectBot(botConfig);
-            }
-        }, 5000);
-    });
-    
-    bot.on('health', () => {
-        updateBotState();
-    });
-    
-    bot.on('move', () => {
-        updateBotState();
-    });
-    
-    bot.on('playerCollect', () => {
-        setTimeout(updateBotState, 500); // Update inventory after a short delay
-    });
-    
-    bot.on('diggingCompleted', (block) => {
-        console.log(`Finished mining ${block.name}`);
-        updateBotState();
-        
-        // Automatically look for another block to mine
-        setTimeout(() => {
-            const newBlock = findBlockToMine();
-            if (newBlock) {
-                bot.lookAt(newBlock.position);
-            }
-        }, 500);
-    });
-    
-    bot.on('diggingAborted', (block) => {
-        console.log(`Mining of ${block.name} was aborted`);
-    });
-    
-    bot.on('blockBreak', (block) => {
-        console.log(`Block broken: ${block.name}`);
-        updateBotState();
-    });
+  bot.loadPlugin(pathfinder);
+  bot.loadPlugin(collectBlock);
+
+  bot.once('spawn', () => {
+    mcData = mcDataLoader(bot.version);
+    const defaultMove = new Movements(bot, mcData);
+    bot.pathfinder.setMovements(defaultMove);
+    console.log('[Bot Server] ✅ Bot spawned');
+    startPeriodicTasks();
+  });
+
+  bot.on('error', err => console.log('[Bot Server] ❗ Bot error:', err));
+  bot.on('end', () => {
+    console.log('[Bot Server] ❌ Bot disconnected');
+    setTimeout(() => {
+      console.log('[Bot Server] 🔁 Respawning bot...');
+      createBot();
+    }, 5000);
+  });
 }
 
-// Function to update the bot's state information
-function updateBotState() {
-    if (!bot || !botConnected) return;
-    
+function startPeriodicTasks() {
+  setInterval(async () => {
+    const pos = bot.entity.position;
+    const inventory = parseInventory(bot.inventory.items());
+    console.log('[Bot Status] Position:', pos);
+    console.log('[Bot Status] Health:', bot.health);
+    console.log('[Bot Status] Hunger:', bot.food);
+    console.log('[Bot Status] Inventory:', inventory);
     try {
-        // Update position
-        botPosition = bot.entity.position;
-        
-        // Update health and hunger
-        botHealth = bot.health;
-        botHunger = bot.food;
-        
-        // Update inventory
-        botInventory = {};
-        bot.inventory.items().forEach(item => {
-            const itemName = item.name;
-            if (botInventory[itemName]) {
-                botInventory[itemName] += item.count;
-            } else {
-                botInventory[itemName] = item.count;
-            }
-        });
-        
-        console.log(`Bot position: (${botPosition.x.toFixed(2)}, ${botPosition.y.toFixed(2)}, ${botPosition.z.toFixed(2)})`);
-        console.log(`Health: ${botHealth}, Food: ${botHunger}`);
-        console.log('Inventory:', botInventory);
+      await autoCraftTools(inventory);
     } catch (err) {
-        console.error('Error updating bot state:', err);
+      console.error('[Bot Logic] ❗ Periodic task error:', err.message);
     }
+  }, 12000);
 }
 
-// Helper function to find a block to mine
-function findBlockToMine() {
-    // Priority blocks to look for
-    const targetBlocks = [
-        'oak_log', 'spruce_log', 'birch_log', 'jungle_log', 'acacia_log', 'dark_oak_log',
-        'stone', 'coal_ore', 'iron_ore', 'gold_ore', 'diamond_ore'
-    ];
-    
-    // Check in a 5x5x5 area around the bot
-    const searchDistance = 5;
-    
-    // Store found blocks and their distances
-    const foundBlocks = [];
-    
-    // Loop through target block types
-    for (const blockType of targetBlocks) {
-        // Find blocks of this type
-        const blocks = bot.findBlocks({
-            matching: block => block.name.includes(blockType),
-            maxDistance: searchDistance,
-            count: 5 // Find up to 5 of each type
-        });
-        
-        // Add found blocks to our list
-        blocks.forEach(blockPos => {
-            const block = bot.blockAt(blockPos);
-            if (block) {
-                // Calculate distance from bot
-                const distance = Math.sqrt(
-                    Math.pow(block.position.x - bot.entity.position.x, 2) +
-                    Math.pow(block.position.y - bot.entity.position.y, 2) +
-                    Math.pow(block.position.z - bot.entity.position.z, 2)
-                );
-                
-                foundBlocks.push({
-                    block: block,
-                    distance: distance
-                });
-            }
-        });
-    }
-    
-    // If we found blocks, return the closest one
-    if (foundBlocks.length > 0) {
-        // Sort by distance
-        foundBlocks.sort((a, b) => a.distance - b.distance);
-        console.log(`Found ${foundBlocks.length} blocks to mine, closest is ${foundBlocks[0].block.name}`);
-        return foundBlocks[0].block;
-    }
-    
-    console.log('No suitable blocks found to mine');
-    return null;
+function parseInventory(items) {
+  const result = {};
+  for (const item of items) {
+    result[item.name] = (result[item.name] || 0) + item.count;
+  }
+  return result;
 }
 
-// Express API endpoints
+async function autoCraftTools(inventory) {
+  const now = Date.now();
+  const totalLogs = bot.inventory.items()
+    .filter(item => item.name.endsWith('_log') && !item.name.includes('stripped'))
+    .reduce((sum, item) => sum + item.count, 0);
 
-// Connect the bot
-app.post('/connect', (req, res) => {
-    const config = req.body;
-    try {
-        // Update config with values from request
-        botConfig = { ...botConfig, ...config };
-        
-        // Disconnect existing bot if necessary
-        if (bot && botConnected) {
-            bot.quit();
-            botConnected = false;
+  if (totalLogs < 6 && now - lastLogCollection > 15000) {
+    const logBlock = bot.findBlock({
+      matching: block => block.name.endsWith('_log') && !block.name.includes('stripped'),
+      maxDistance: 250
+    });
+
+    if (logBlock) {
+      try {
+        console.log('[Bot Collecting] Collecting nearby log:', logBlock.name);
+        await bot.collectBlock.collect(logBlock);
+        lastLogCollection = Date.now();
+        await bot.waitForTicks(20);
+        return;
+      } catch (err) {
+        console.log('[Bot Collecting] ❗ Error:', err.message);
+        return;
+      }
+    } else {
+      console.log('[Bot Collecting] ⚠️ No wooden log found nearby');
+      return;
+    }
+  }
+
+  if (!inventory.oak_planks || inventory.oak_planks < 4) {
+    await bot.waitForTicks(10);
+    await craftItemFromRecipe('oak_planks');
+    await bot.waitForTicks(10);
+    return;
+  }
+
+  if (!inventory.stick || inventory.stick < 2) {
+    await bot.waitForTicks(10);
+    await craftItemFromRecipe('stick');
+    await bot.waitForTicks(10);
+    return;
+  }
+
+  if (!inventory.crafting_table && inventory.oak_planks >= 4) {
+    await bot.waitForTicks(10);
+    await craftItemFromRecipe('crafting_table');
+    await bot.waitForTicks(10);
+    return;
+  }
+
+  if (!inventory.wooden_pickaxe && inventory.stick >= 2 && inventory.oak_planks >= 3) {
+    await bot.waitForTicks(10);
+    await craftItemFromRecipe('wooden_pickaxe');
+    await bot.waitForTicks(10);
+    return;
+  }
+
+  if (inventory.wooden_pickaxe && (!inventory.cobblestone || inventory.cobblestone < 6)) {
+    const stoneBlock = bot.findBlock({
+      matching: block => ['stone', 'andesite', 'diorite'].includes(block.name),
+      maxDistance: 250
+    });
+    if (stoneBlock) {
+      try {
+        console.log('[Bot Mining] Mining stone with wooden pickaxe...');
+        await bot.equip(bot.inventory.items().find(i => i.name === 'wooden_pickaxe'), 'hand');
+        await bot.dig(stoneBlock);
+        await bot.waitForTicks(10);
+        return;
+      } catch (err) {
+        console.log('[Bot Mining] ❗ Error:', err.message);
+        return;
+      }
+    } else {
+      console.log('[Bot Mining] ⚠️ No stone block nearby');
+      return;
+    }
+  }
+}
+
+async function craftItemFromRecipe(recipeName) {
+  if (craftingInProgress) return;
+  craftingInProgress = true;
+
+  try {
+    const recipePath = path.join(__dirname, 'recipes', `${recipeName}.json`);
+    const shaped = parseShapedRecipe(recipePath);
+    const shapeless = parseShapelessRecipe(recipePath);
+    const parsed = shaped || shapeless;
+
+    if (!parsed) {
+      console.log(`[Bot Crafting] ❌ Failed to load recipe: ${recipeName}`);
+      return;
+    }
+
+    const { result } = parsed;
+    console.log(`[Bot Crafting] 🔧 Crafting ${result.id}...`);
+
+    let craftingTableBlock = bot.findBlock({
+      matching: block => block.name === 'crafting_table',
+      maxDistance: 250
+    });
+
+    if (!craftingTableBlock && shaped && recipeName !== 'crafting_table') {
+      const tableInInventory = bot.inventory.items().find(item => item.name === 'crafting_table');
+      if (tableInInventory) {
+        const targetPos = bot.entity.position.offset(1, 0, 0).floored();
+        const refBlock = bot.blockAt(targetPos.offset(0, -1, 0));
+        if (refBlock && bot.canPlaceBlock(refBlock)) {
+          await bot.equip(tableInInventory, 'hand');
+          await bot.placeBlock(refBlock, new Vec3(0, 1, 0));
+          await bot.waitForTicks(10);
+          craftingTableBlock = bot.blockAt(targetPos);
         }
-        
-        // Connect new bot
-        connectBot(botConfig);
-        res.json({ status: 'connecting', config: botConfig });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+      } else {
+        await craftItemFromRecipe('crafting_table');
+        await bot.waitForTicks(10);
+        craftingTableBlock = bot.findBlock({
+          matching: block => block.name === 'crafting_table',
+          maxDistance: 250
+        });
+      }
     }
+
+    const itemName = result.id.replace('minecraft:', '');
+    const itemInfo = mcData.itemsByName[itemName];
+
+    if (!itemInfo) {
+      console.log(`[Bot Crafting] ❌ Invalid item name: ${itemName}`);
+      return;
+    }
+
+    const tableToUse = shaped ? craftingTableBlock : null;
+    const allRecipes = bot.recipesFor(itemInfo.id, null, 1, tableToUse);
+
+    if (!allRecipes || allRecipes.length === 0) {
+      console.log(`[Bot Crafting] ❌ No matching recipe found for ${itemName}`);
+      return;
+    }
+
+    const recipe = allRecipes[0];
+    await bot.craft(recipe, result.count || 1, tableToUse);
+    console.log(`[Bot Crafting] ✅ Crafted ${result.id}`);
+    await bot.waitForTicks(20);
+  } catch (err) {
+    console.log(`[Bot Crafting] ❌ Crafting failed: ${err.message}`);
+  } finally {
+    craftingInProgress = false;
+  }
+}
+
+createBot();
+
+app.use(express.json());
+
+app.post('/reset', async (req, res) => {
+  try {
+    await bot.waitForTicks(5);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('[Bot Server] ❌ Reset error:', err.message);
+    res.status(500).send('Reset failed');
+  }
 });
 
-// Get bot status
+app.post('/act', async (req, res) => {
+  try {
+    await bot.waitForTicks(1);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('[Bot Server] ❌ Act error:', err.message);
+    res.status(500).send('Action failed');
+  }
+});
+
 app.get('/status', (req, res) => {
+  try {
+    const pos = bot.entity.position;
+    const inventory = parseInventory(bot.inventory.items());
     res.json({
-        connected: botConnected,
-        position: botPosition,
-        health: botHealth,
-        hunger: botHunger,
-        inventory: botInventory
+      health: bot.health,
+      hunger: bot.food,
+      position: pos,
+      inventory: inventory
     });
+  } catch (err) {
+    console.error('[Bot Server] ❌ Status error:', err.message);
+    res.status(500).send('Status unavailable');
+  }
 });
 
-// Move the bot
-app.post('/move', (req, res) => {
-    const { direction, distance } = req.body;
-    
-    if (!bot || !botConnected) {
-        return res.status(400).json({ error: 'Bot not connected' });
-    }
-    
-    try {
-        switch (direction) {
-            case 'forward':
-                bot.setControlState('forward', true);
-                setTimeout(() => {
-                    bot.setControlState('forward', false);
-                    res.json({ status: 'moved', direction });
-                }, distance * 250);
-                break;
-            case 'backward':
-                bot.setControlState('back', true);
-                setTimeout(() => {
-                    bot.setControlState('back', false);
-                    res.json({ status: 'moved', direction });
-                }, distance * 250);
-                break;
-            case 'left':
-                bot.setControlState('left', true);
-                setTimeout(() => {
-                    bot.setControlState('left', false);
-                    res.json({ status: 'moved', direction });
-                }, distance * 250);
-                break;
-            case 'right':
-                bot.setControlState('right', true);
-                setTimeout(() => {
-                    bot.setControlState('right', false);
-                    res.json({ status: 'moved', direction });
-                }, distance * 250);
-                break;
-            default:
-                res.status(400).json({ error: 'Invalid direction' });
-        }
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
+app.get('/ping', (_, res) => res.sendStatus(200));
 
-// Jump
-app.post('/jump', (req, res) => {
-    if (!bot || !botConnected) {
-        return res.status(400).json({ error: 'Bot not connected' });
-    }
-    
-    try {
-        bot.setControlState('jump', true);
-        setTimeout(() => {
-            bot.setControlState('jump', false);
-            res.json({ status: 'jumped' });
-        }, 500);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Attack (entity in front of the bot)
-app.post('/attack', (req, res) => {
-    if (!bot || !botConnected) {
-        return res.status(400).json({ error: 'Bot not connected' });
-    }
-    
-    try {
-        const entity = bot.nearestEntity(e => e.type === 'mob');
-        if (entity) {
-            bot.attack(entity);
-            res.json({ status: 'attacked', entity: entity.name });
-        } else {
-            res.json({ status: 'no target' });
-        }
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Mine block (in front of the bot)
-app.post('/mine', (req, res) => {
-    if (!bot || !botConnected) {
-        return res.status(400).json({ error: 'Bot not connected' });
-    }
-    
-    try {
-        // Look for blocks to mine within 4 blocks distance
-        const block = bot.blockAtCursor(4); 
-        
-        // If no block is found, try looking for one
-        if (!block || block.name === 'air') {
-            // Try to find a better block to mine
-            const targetBlock = findBlockToMine();
-            
-            if (targetBlock) {
-                // Look at the block first
-                bot.lookAt(targetBlock.position);
-                
-                // Dig the block
-                bot.dig(targetBlock, (err) => {
-                    if (err) {
-                        console.error('Error mining block:', err);
-                        res.status(500).json({ error: err.message });
-                    } else {
-                        console.log(`Successfully mined ${targetBlock.name}`);
-                        res.json({ status: 'mined', block: targetBlock.name });
-                    }
-                });
-                return;
-            } else {
-                // No blocks found to mine
-                res.json({ status: 'no block' });
-                return;
-            }
-        }
-        
-        // If we found a block, mine it
-        console.log(`Mining block: ${block.name}`);
-        bot.dig(block, (err) => {
-            if (err) {
-                console.error('Error mining block:', err);
-                res.status(500).json({ error: err.message });
-            } else {
-                console.log(`Successfully mined ${block.name}`);
-                res.json({ status: 'mined', block: block.name });
-            }
-        });
-    } catch (err) {
-        console.error('Error in /mine endpoint:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Place block
-app.post('/place', (req, res) => {
-    const { itemName } = req.body;
-    
-    if (!bot || !botConnected) {
-        return res.status(400).json({ error: 'Bot not connected' });
-    }
-    
-    try {
-        const block = bot.blockAtCursor(4); // Look at block within 4 blocks distance
-        if (block) {
-            // Find the item in inventory
-            const item = bot.inventory.items().find(item => item.name === itemName);
-            if (item) {
-                bot.equip(item, 'hand', err => {
-                    if (err) {
-                        res.status(500).json({ error: err.message });
-                    } else {
-                        bot.placeBlock(block, bot.entity.position.offset(0, 0, 1), err => {
-                            if (err) {
-                                res.status(500).json({ error: err.message });
-                            } else {
-                                res.json({ status: 'placed', block: itemName });
-                            }
-                        });
-                    }
-                });
-            } else {
-                res.json({ status: 'no item', itemName });
-            }
-        } else {
-            res.json({ status: 'no block' });
-        }
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Get blocks around bot
-app.get('/blocks', (req, res) => {
-    const { radius } = req.query;
-    const blockRadius = parseInt(radius) || 3;
-    
-    if (!bot || !botConnected) {
-        return res.status(400).json({ error: 'Bot not connected' });
-    }
-    
-    try {
-        const blocks = {};
-        const pos = bot.entity.position;
-        
-        for (let x = -blockRadius; x <= blockRadius; x++) {
-            for (let y = -blockRadius; y <= blockRadius; y++) {
-                for (let z = -blockRadius; z <= blockRadius; z++) {
-                    const block = bot.blockAt(pos.offset(x, y, z));
-                    if (block && block.name !== 'air') {
-                        if (!blocks[block.name]) {
-                            blocks[block.name] = [];
-                        }
-                        blocks[block.name].push({
-                            x: block.position.x,
-                            y: block.position.y,
-                            z: block.position.z
-                        });
-                    }
-                }
-            }
-        }
-        
-        res.json({ blocks });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Run a raw Minecraft command
-app.post('/command', (req, res) => {
-    const { command } = req.body;
-    
-    if (!bot || !botConnected) {
-        return res.status(400).json({ error: 'Bot not connected' });
-    }
-    
-    try {
-        bot.chat(`/${command}`);
-        res.json({ status: 'command sent', command });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Start the server
-app.listen(PORT, () => {
-    console.log(`Minecraft Bot API running on http://localhost:${PORT}`);
-    console.log('Use /connect to connect the bot to your Minecraft server');
+app.listen(port, () => {
+  console.log(`🚀 Bot server running on http://localhost:${port}`);
 });
