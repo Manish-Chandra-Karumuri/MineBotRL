@@ -161,12 +161,7 @@ python main.py --mode visualize --model-path logs/minecraft_rl_PPO_*/final_model
 npm install
 ```
 
----
 
-MIT License
-
-
----
 
 ## 🌐 Emoji Support
 
