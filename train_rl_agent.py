@@ -70,8 +70,6 @@ class CurriculumLearningCallback(BaseCallback):
         if self.verbose:
             print(f"[Curriculum] Training completed at level {self.curriculum_level}")
 
-
-
 class MetricLogger:
     """Logger for training metrics with visualization capabilities."""
     
@@ -168,7 +166,10 @@ def train_rl_agent(algorithm="PPO",
                    total_timesteps=1_000_000, 
                    log_dir=None, 
                    use_curriculum=True,
-                   show_progress=True):
+                   show_progress=True,
+                   server_host="localhost",
+                   server_port=25565,
+                   bot_username="RLBot"):
     """
     Train a reinforcement learning agent in the Minecraft environment.
     
@@ -178,6 +179,9 @@ def train_rl_agent(algorithm="PPO",
         log_dir (str): Directory to save logs and models
         use_curriculum (bool): Whether to use curriculum learning
         show_progress (bool): Whether to show progress bar during training
+        server_host (str): Minecraft server host
+        server_port (int): Minecraft server port
+        bot_username (str): Username for the Minecraft bot
     """
     # Set up logging directory
     if log_dir is None:
@@ -193,8 +197,8 @@ def train_rl_agent(algorithm="PPO",
     logger.info(f"Logs will be saved to {log_dir}")
     
     try:
-        # Create the Minecraft environment
-        env = EnhancedMinecraftEnv()
+        # Create the Minecraft environment with server details
+        env = EnhancedMinecraftEnv(server_url=f"http://{server_host}:3000")
         
         # Create the vectorized environment
         env = Monitor(env, os.path.join(log_dir, "monitor"))
@@ -202,7 +206,7 @@ def train_rl_agent(algorithm="PPO",
         env = VecMonitor(env, os.path.join(log_dir, "vec_monitor"))
         
         # Create an evaluation environment
-        eval_env = EnhancedMinecraftEnv()
+        eval_env = EnhancedMinecraftEnv(server_url=f"http://{server_host}:3000")
         eval_env = Monitor(eval_env, os.path.join(log_dir, "eval_monitor"))
         eval_env = DummyVecEnv([lambda: eval_env])
         

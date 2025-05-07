@@ -1,4 +1,3 @@
-# main.py
 import os
 import subprocess
 import time
@@ -6,7 +5,19 @@ import argparse
 import logging
 import signal
 import sys
-from train_rl_agent import train_rl_agent, evaluate_trained_agent, visualize_agent_behavior
+from threading import Thread
+import importlib.util
+import json
+
+# Import custom modules
+spec_env = importlib.util.spec_from_file_location("environment", "environment.py")
+env_module = importlib.util.module_from_spec(spec_env)
+spec_env.loader.exec_module(env_module)
+EnhancedMinecraftEnv = env_module.EnhancedMinecraftEnv
+
+spec_train = importlib.util.spec_from_file_location("train_rl_agent", "train_rl_agent.py")
+train_module = importlib.util.module_from_spec(spec_train)
+spec_train.loader.exec_module(train_module)
 
 # Configure logging
 logging.basicConfig(
@@ -55,7 +66,6 @@ def start_bot_server():
         for line in nodejs_process.stderr:
             logger.error(f"[NodeJS Error] {line.strip()}")
     
-    from threading import Thread
     log_thread = Thread(target=log_output, daemon=True)
     log_thread.start()
     
@@ -129,7 +139,7 @@ def create_sample_recipes(recipes_dir):
   },
   "result": {
     "item": "minecraft:stick",
-    "count": 4
+    "count": 4"
   }
 }""",
         "stone_pickaxe.json": """{
@@ -199,7 +209,7 @@ def create_logs_directory():
     return logs_dir
 
 def main():
-    parser = argparse.ArgumentParser(description="Minecraft RL Bot Training System")
+    parser = argparse.ArgumentParser(description="Minecraft RL Bot Training System Hub")
     parser.add_argument("--mode", type=str, choices=["train", "evaluate", "visualize"], default="train",
                         help="Mode to run in: train, evaluate, or visualize")
     parser.add_argument("--algorithm", type=str, choices=["PPO", "A2C", "DQN"], default="PPO",
@@ -237,14 +247,21 @@ def main():
         # Start Node.js bot server if needed
         if not args.skip_node:
             nodejs_proc = start_bot_server()
+            logger.info("Node.js bot server integrated and running")
+        
+        # Update environment with server details
+        env_module.EnhancedMinecraftEnv.server_url = f"http://{args.server_host}:3000"
         
         # Run the specified mode
         if args.mode == "train":
             logger.info(f"Starting training with {args.algorithm} for {args.timesteps} timesteps")
-            model, log_dir = train_rl_agent(
+            model, log_dir = train_module.train_rl_agent(
                 algorithm=args.algorithm,
                 total_timesteps=args.timesteps,
-                use_curriculum=not args.no_curriculum
+                use_curriculum=not args.no_curriculum,
+                server_host=args.server_host,
+                server_port=args.server_port,
+                bot_username=args.bot_username
             )
             logger.info(f"Training completed. Model saved to {log_dir}")
             
@@ -252,10 +269,8 @@ def main():
             if not args.model_path:
                 logger.error("Error: --model-path is required for evaluation mode")
                 return 1
-                
             logger.info(f"Evaluating model from {args.model_path} for {args.episodes} episodes")
-            results = evaluate_trained_agent(args.model_path, args.episodes)
-            
+            results = train_module.evaluate_trained_agent(args.model_path, args.episodes)
             logger.info(f"Evaluation results:")
             logger.info(f"Average reward: {results['avg_reward']:.2f}")
             logger.info(f"Average episode length: {results['avg_length']:.1f} steps")
@@ -269,9 +284,8 @@ def main():
             if not args.model_path:
                 logger.error("Error: --model-path is required for visualization mode")
                 return 1
-                
             logger.info(f"Visualizing agent behavior from {args.model_path} for {args.visualization_time} seconds")
-            visualize_agent_behavior(args.model_path, args.visualization_time)
+            train_module.visualize_agent_behavior(args.model_path, args.visualization_time)
         
         logger.info("Process completed successfully")
         return 0
