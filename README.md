@@ -1,94 +1,176 @@
-# Minecraft RL Bot
+# 🧠 Minecraft RL Bot
 
-A reinforcement learning bot that controls Minecraft using PyAutoGUI. The bot uses the PPO (Proximal Policy Optimization) algorithm to learn basic movement and navigation in Minecraft.
+This project implements a **Reinforcement Learning agent for Minecraft**, where a bot autonomously learns survival tasks like mining, crafting, and exploration using a combination of:
 
-## Project Structure
+- 🧠 **Stable-Baselines3 (PPO, A2C, DQN)**
+- 🕹️ **Custom Gym-compatible environment**
+- 🧱 **Mineflayer-based Minecraft bot (Node.js)**
+- 📦 **Recipe-based crafting with JSON files**
 
-The project is organized into multiple files:
+---
 
-- `controller.py`: Handles direct interaction with Minecraft (keyboard/mouse control)
-- `environment.py`: Defines the reinforcement learning environment
-- `bot.py`: Manages the training and execution of the bot
-- `main.py`: Entry point of the program
+## 📁 Project Structure
 
-## Requirements
-
-- Python 3.8 or higher
-- Minecraft (any version)
-- Required Python packages (install using `pip install -r requirements.txt`):
-  - numpy
-  - gymnasium
-  - stable-baselines3
-  - pyautogui
-  - keyboard
-  - pywin32
-
-## Installation
-
-1. Clone this repository:
-```bash
-git clone <repository-url>
-cd <repository-directory>
+```
+minecraft-rl-bot/
+├── environment.py            # Gym-compatible environment wrapper (Python)
+├── main.py                   # Main control script for training/evaluation
+├── train_rl_agent.py         # RL training, evaluation, and visualization logic
+├── minecraft_bot.js          # Node.js bot logic (movement, crafting, mining)
+├── recipeParser.js           # JS utility to parse and validate crafting recipes
+├── package.json              # Node.js dependencies and script setup
+├── requirements.txt          # Python dependencies
+├── recipes/                  # Auto-generated folder of crafting recipes
+├── logs/                     # Auto-generated logs during training
 ```
 
-2. Install the required packages:
+---
+
+## 🚀 Getting Started
+
+### 1. Requirements
+
+#### 🐍 Python (Recommended: 3.8+)
+Install Python dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-3. Make sure Minecraft is installed and running on your system.
+#### 🟦 Node.js (Recommended: v16+)
+Install JavaScript dependencies:
 
-## Usage
-
-1. Start Minecraft and enter a world where you can move around.
-
-2. Run the bot:
 ```bash
-python main.py
+npm install
 ```
 
-3. The bot will:
-   - Show a 5-second countdown
-   - Find and focus the Minecraft window
-   - Train for 10,000 timesteps
-   - Save the trained model
-   - Run an episode to demonstrate learned behavior
+---
 
-4. To stop the bot:
-   - Press Ctrl+C
-   - Or move your mouse to any corner of the screen (PyAutoGUI failsafe)
+## 🧪 Run Training
 
-## How It Works
+To start training the RL bot:
 
-The bot uses reinforcement learning to control Minecraft through simulated keyboard and mouse inputs:
+```bash
+python main.py --mode train --algorithm PPO --timesteps 500000
+```
 
-1. **Action Space**:
-   - Movement (forward/backward, left/right)
-   - Jumping
-   - Looking around (yaw and pitch)
+Optional flags:
 
-2. **Observation Space**:
-   - Position (x, y, z)
-   - Rotation (yaw, pitch)
-   - Block information
+- `--skip-node`: Skip starting the Node.js bot (if already running).
+- `--no-curriculum`: Disable curriculum learning logic.
+- `--bot-username`: Change bot’s Minecraft name.
 
-3. **Reward Function**:
-   - Small negative reward (-0.1) for each step
-   - Positive reward (+0.5) for jumping
-   - Small positive reward (+0.1) for moving
+---
 
-## Troubleshooting
+## 🔍 Evaluation
 
-If you encounter issues:
+Evaluate a saved model:
 
-1. Make sure Minecraft is running and visible
-2. Check that you're in a world and can move around
-3. Try restarting both Minecraft and the script
-4. Ensure no other program is interfering with keyboard/mouse input
-5. Verify all required packages are installed correctly
+```bash
+python main.py --mode evaluate --model-path path/to/final_model.zip
+```
 
-## Notes
+---
 
-- The bot currently uses simulated state information since we can't directly read the game state
-- The rewards are simple and might not lead to complex behaviors
-- The bot controls your actual Minecraft character through keyboard and mouse simulation 
+## 🎥 Visualization
+
+Visualize a trained agent:
+
+```bash
+python main.py --mode visualize --model-path path/to/final_model.zip
+```
+
+---
+
+## 🧠 RL Environment (environment.py)
+
+- Follows the OpenAI Gym API (`reset`, `step`, `render`)
+- Observation space: Bot position, inventory, nearby blocks, health, etc.
+- Action space: Move, jump, mine, place, craft, collect, eat
+- Reward function encourages resource collection, crafting, and survival
+
+---
+
+## 🤖 Minecraft Bot (minecraft_bot.js)
+
+- Built using [`mineflayer`](https://github.com/PrismarineJS/mineflayer)
+- Starts in survival mode, gathers resources, crafts tools, places blocks
+- Uses pathfinding and block recognition to perform survival tasks
+- Automatically restarts on failure
+
+---
+
+## 📜 Crafting Recipes
+
+All crafting logic is defined in `/recipes/*.json` using official Minecraft formats.
+
+Sample items:
+
+- `crafting_table.json`
+- `wooden_pickaxe.json`
+- `stick.json`
+- `stone_pickaxe.json`
+
+These are parsed by `recipeParser.js` to validate ingredients and simulate crafting.
+
+---
+
+## 📓 Logs & Output
+
+- `logs/`: Contains training metrics, models, and visualizations
+- `minecraft_rl.log`: Combined output log for both Python + Node.js
+
+---
+
+## 🧰 Developer Notes
+
+### Start the bot manually (if needed):
+
+```bash
+node minecraft_bot.js
+```
+
+### Auto-create recipes folder:
+
+The first run of `main.py` will generate a `/recipes/` directory with starter JSONs.
+
+---
+
+## 🧠 Example Workflow
+
+```bash
+# Train agent for 1M steps
+python main.py --mode train --timesteps 1000000
+
+# Evaluate trained model
+python main.py --mode evaluate --model-path logs/minecraft_rl_PPO_*/final_model.zip
+
+# Visualize behavior
+python main.py --mode visualize --model-path logs/minecraft_rl_PPO_*/final_model.zip
+```
+
+---
+
+## 🛠 Troubleshooting
+
+- Make sure Minecraft server is running and accessible on port `25565`.
+- Use [TLauncher](https://tlauncher.org/en/) or a local Minecraft server to host the world.
+- If `mineflayer` throws plugin errors, double-check `node_modules` with:
+
+```bash
+npm install
+```
+
+---
+
+## 📃 License
+
+MIT License
+
+
+---
+
+## 🌐 Emoji Support
+
+All emojis used in this README are supported by [Twemoji](https://twemoji.twitter.com/) and render well on most modern systems. 
+For emoji markdown compatibility and usage, refer to: [https://emojipedia.org/](https://emojipedia.org/)

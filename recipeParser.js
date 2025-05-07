@@ -1,176 +1,118 @@
-// recipeParser.js
 const fs = require('fs');
-const path = require('path');
 
-/**
- * Parse a Minecraft shaped crafting recipe from a JSON file
- * @param {string} filePath - Path to the recipe JSON file
- * @returns {object|null} - Parsed recipe object or null if invalid
- */
-function parseShapedRecipe(filePath) {
+function parseShapedRecipe(recipePath) {
   try {
-    const raw = fs.readFileSync(filePath);
-    const data = JSON.parse(raw);
-    if (data.type === 'minecraft:crafting_shaped') {
-      return data;
+    const recipeData = JSON.parse(fs.readFileSync(recipePath, 'utf8'));
+    if (recipeData.type === 'minecraft:crafting_shaped') {
+      return recipeData;
     }
+    return null;
   } catch (err) {
-    console.warn(`[Recipe Parser] ❌ Error parsing shaped recipe at ${filePath}: ${err.message}`);
+    console.error(`Error parsing shaped recipe ${recipePath}:`, err.message);
+    return null;
   }
-  return null;
 }
 
-/**
- * Parse a Minecraft shapeless crafting recipe from a JSON file
- * @param {string} filePath - Path to the recipe JSON file
- * @returns {object|null} - Parsed recipe object or null if invalid
- */
-function parseShapelessRecipe(filePath) {
+function parseShapelessRecipe(recipePath) {
   try {
-    const raw = fs.readFileSync(filePath);
-    const data = JSON.parse(raw);
-    if (data.type === 'minecraft:crafting_shapeless') {
-      return data;
+    const recipeData = JSON.parse(fs.readFileSync(recipePath, 'utf8'));
+    if (recipeData.type === 'minecraft:crafting_shapeless') {
+      return recipeData;
     }
+    return null;
   } catch (err) {
-    console.warn(`[Recipe Parser] ❌ Error parsing shapeless recipe at ${filePath}: ${err.message}`);
+    console.error(`Error parsing shapeless recipe ${recipePath}:`, err.message);
+    return null;
   }
-  return null;
 }
 
-/**
- * Check if all required ingredients for a recipe are present in the inventory
- * @param {object} recipe - Recipe object
- * @param {object} inventory - Inventory object with item counts
- * @returns {boolean} - True if all ingredients are available
- */
 function hasRequiredIngredients(recipe, inventory) {
-  // For shaped recipes
-  if (recipe.type === 'minecraft:crafting_shaped') {
-    const pattern = recipe.pattern;
-    const key = recipe.key;
-    
-    // Count required items
-    const required = {};
-    for (const row of pattern) {
-      for (const char of row) {
-        if (char !== ' ') {
-          const item = key[char];
-          if (item && item.item) {
-            const itemName = item.item.replace('minecraft:', '');
-            required[itemName] = (required[itemName] || 0) + 1;
-          }
-        }
-      }
+  const requiredIngredients = getRequiredIngredients(recipe);
+  for (const [item, count] of Object.entries(requiredIngredients)) {
+    if (!inventory[item] || inventory[item] < count) {
+      return false;
     }
-    
-    // Check if all required items are in inventory
-    for (const [itemName, count] of Object.entries(required)) {
-      if (!inventory[itemName] || inventory[itemName] < count) {
-        return false;
-      }
-    }
-    return true;
   }
-  
-  // For shapeless recipes
-  if (recipe.type === 'minecraft:crafting_shapeless') {
-    const ingredients = recipe.ingredients;
-    
-    // Count required items
-    const required = {};
-    for (const ingredient of ingredients) {
-      if (ingredient && ingredient.item) {
-        const itemName = ingredient.item.replace('minecraft:', '');
-        required[itemName] = (required[itemName] || 0) + 1;
-      }
-    }
-    
-    // Check if all required items are in inventory
-    for (const [itemName, count] of Object.entries(required)) {
-      if (!inventory[itemName] || inventory[itemName] < count) {
-        return false;
-      }
-    }
-    return true;
-  }
-  
-  return false;
+  return true;
 }
 
-/**
- * Get a list of required ingredients for a recipe
- * @param {object} recipe - Recipe object
- * @returns {object} - Object with ingredient names and counts
- */
 function getRequiredIngredients(recipe) {
-  const required = {};
+  const ingredients = {};
   
-  // For shaped recipes
+  // Tag mapping for common Minecraft tags
+  const tagToItemMap = {
+    'minecraft:oak_logs': 'oak_log',
+    'minecraft:planks': 'oak_planks',
+    'minecraft:logs': 'oak_log',
+    'minecraft:stone_tool_materials': 'cobblestone'
+  };
+  
   if (recipe.type === 'minecraft:crafting_shaped') {
     const pattern = recipe.pattern;
     const key = recipe.key;
     
     for (const row of pattern) {
-      for (const char of row) {
-        if (char !== ' ') {
-          const item = key[char];
-          if (item && item.item) {
-            const itemName = item.item.replace('minecraft:', '');
-            required[itemName] = (required[itemName] || 0) + 1;
+      for (const symbol of row) {
+        if (symbol !== ' ') {
+          const ingredient = key[symbol];
+          let itemName;
+          if (ingredient && ingredient.item) {
+            itemName = ingredient.item.replace('minecraft:', '');
+            console.log(`Debug: Resolved item ${ingredient.item} to ${itemName}`);
+          } else if (ingredient && ingredient.tag) {
+            itemName = tagToItemMap[ingredient.tag];
+            if (!itemName) {
+              console.warn(`Unsupported tag: ${ingredient.tag}`);
+              continue;
+            }
+            console.log(`Debug: Resolved tag ${ingredient.tag} to ${itemName}`);
+          } else {
+            console.warn(`Invalid ingredient in recipe:`, ingredient);
+            continue;
           }
+          ingredients[itemName] = (ingredients[itemName] || 0) + 1;
         }
       }
     }
-  }
-  
-  // For shapeless recipes
-  if (recipe.type === 'minecraft:crafting_shapeless') {
-    const ingredients = recipe.ingredients;
-    
-    for (const ingredient of ingredients) {
+  } else if (recipe.type === 'minecraft:crafting_shapeless') {
+    for (const ingredient of recipe.ingredients) {
+      let itemName;
       if (ingredient && ingredient.item) {
-        const itemName = ingredient.item.replace('minecraft:', '');
-        required[itemName] = (required[itemName] || 0) + 1;
-      }
-    }
-  }
-  
-  return required;
-}
-
-/**
- * Find all craftable recipes based on current inventory
- * @param {object} inventory - Inventory object with item counts
- * @param {string} recipesDir - Directory containing recipe JSON files
- * @returns {array} - Array of craftable recipe names
- */
-function findCraftableRecipes(inventory, recipesDir = path.join(__dirname, 'recipes')) {
-  const craftable = [];
-  
-  try {
-    const files = fs.readdirSync(recipesDir);
-    
-    for (const file of files) {
-      if (file.endsWith('.json')) {
-        const filePath = path.join(recipesDir, file);
-        const recipeName = file.replace('.json', '');
-        
-        // Try both shaped and shapeless
-        const shaped = parseShapedRecipe(filePath);
-        if (shaped && hasRequiredIngredients(shaped, inventory)) {
-          craftable.push(recipeName);
+        itemName = ingredient.item.replace('minecraft:', '');
+        console.log(`Debug: Resolved item ${ingredient.item} to ${itemName}`);
+      } else if (ingredient && ingredient.tag) {
+        itemName = tagToItemMap[ingredient.tag];
+        if (!itemName) {
+          console.warn(`Unsupported tag: ${ingredient.tag}`);
           continue;
         }
-        
-        const shapeless = parseShapelessRecipe(filePath);
-        if (shapeless && hasRequiredIngredients(shapeless, inventory)) {
-          craftable.push(recipeName);
-        }
+        console.log(`Debug: Resolved tag ${ingredient.tag} to ${itemName}`);
+      } else {
+        console.warn(`Invalid ingredient in recipe:`, ingredient);
+        continue;
       }
+      ingredients[itemName] = (ingredients[itemName] || 0) + 1;
     }
-  } catch (err) {
-    console.warn(`[Recipe Parser] ❌ Error finding craftable recipes: ${err.message}`);
+  }
+  
+  console.log(`Debug: Final ingredients for recipe:`, ingredients);
+  return ingredients;
+}
+
+function findCraftableRecipes(inventory) {
+  const craftable = [];
+  const recipeFiles = fs.readdirSync('./recipes').filter(file => file.endsWith('.json'));
+  
+  for (const file of recipeFiles) {
+    const recipePath = `./recipes/${file}`;
+    const shapedRecipe = parseShapedRecipe(recipePath);
+    const shapelessRecipe = parseShapelessRecipe(recipePath);
+    const recipe = shapedRecipe || shapelessRecipe;
+    
+    if (recipe && hasRequiredIngredients(recipe, inventory)) {
+      const itemName = file.replace('.json', '');
+      craftable.push(itemName);
+    }
   }
   
   return craftable;
