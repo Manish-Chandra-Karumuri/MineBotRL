@@ -163,8 +163,6 @@ npm install
 
 ---
 
-## 📃 License
-
 MIT License
 
 
